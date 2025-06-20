@@ -42,7 +42,7 @@
                         <div class="row">
                             <div class="col-md-6">
                                 <p><strong>Mã đơn hàng:</strong></p>
-                                <p style="color: #007bff; font-weight: bold;">#{{ strtoupper(uniqid()) }}</p>
+                                <p style="color: #007bff; font-weight: bold;">#{{ Session::get('order_info.order_code', strtoupper(uniqid())) }}</p>
                             </div>
                             <div class="col-md-6">
                                 <p><strong>Thời gian đặt:</strong></p>
@@ -50,37 +50,57 @@
                             </div>
                         </div>
 
-                        <hr>                        <div class="row">
+                        <hr>
+                        
+                        <div class="row">
+                            <div class="col-md-6">
+                                <p><strong>Tạm tính:</strong></p>
+                                <p>{{ number_format(Session::get('order_info.subtotal', 0), 0, ',', '.') }} VNĐ</p>
+                            </div>
+                            <div class="col-md-6">
+                                <p><strong>Phí vận chuyển:</strong></p>
+                                <p>{{ number_format(Session::get('order_info.shipping_fee', 0), 0, ',', '.') }} VNĐ</p>
+                            </div>
+                        </div>
+
+                        @if(Session::get('order_info.discount_amount', 0) > 0)
+                        <div class="row">
+                            <div class="col-md-12">
+                                <p><strong>Giảm giá:</strong></p>
+                                <p style="color: #28a745; font-weight: bold; font-size: 16px;">
+                                    -{{ number_format(Session::get('order_info.discount_amount'), 0, ',', '.') }} VNĐ
+                                </p>
+                                @if(Session::get('order_info.discount_description'))
+                                <p style="color: #155724; font-size: 12px; margin-top: 5px;">
+                                    {{ Session::get('order_info.discount_description') }}
+                                </p>
+                                @endif
+                            </div>
+                        </div>
+                        @endif
+
+                        <div class="row">
                             <div class="col-md-6">
                                 <p><strong>Phương thức thanh toán:</strong></p>
                                 <p style="color: #28a745; font-weight: bold; font-size: 16px;">
-                                    <span id="payment-method">🔄 Đang tải...</span>
+                                    {{ Session::get('order_info.payment_method', 'Không xác định') }}
                                 </p>
                             </div>
                             <div class="col-md-6">
                                 <p><strong>Phương thức vận chuyển:</strong></p>
                                 <p style="color: #007bff; font-weight: bold; font-size: 16px;">
-                                    <span id="shipping-method">🔄 Đang tải...</span>
+                                    {{ Session::get('order_info.shipping_method', 'Không xác định') }}
                                 </p>
                             </div>
                         </div>
 
                         <div class="row" style="margin-top: 15px;">
-                            <div class="col-md-6">
-                                <p><strong>Phí vận chuyển:</strong></p>
-                                <p style="color: #6c757d; font-weight: bold;">
-                                    <span id="shipping-fee">🔄 Đang tải...</span> VNĐ
-                                </p>
-                            </div>
                             <div class="col-md-6">
                                 <p><strong>Tổng tiền:</strong></p>
                                 <p style="color: #dc3545; font-size: 20px; font-weight: bold;">
-                                    <span id="total-amount">🔄 Đang tải...</span> VNĐ
+                                    {{ number_format(Session::get('order_info.order_total', 0), 0, ',', '.') }} VNĐ
                                 </p>
                             </div>
-                        </div>
-
-                        <div class="row" style="margin-top: 15px;">
                             <div class="col-md-6">
                                 <p><strong>Trạng thái:</strong></p>
                                 <p style="color: #ffc107; font-weight: bold;">
@@ -131,31 +151,9 @@
 
 <script>
 $(document).ready(function() {
-    // Lấy thông tin đơn hàng từ sessionStorage nếu có
-    const orderInfo = sessionStorage.getItem('orderInfo');
-    if (orderInfo) {
-        const info = JSON.parse(orderInfo);
-        
-        // Cập nhật thông tin với icon và formatting đẹp
-        $('#payment-method').html(`💳 ${info.payment_method || 'Không xác định'}`);
-        $('#shipping-method').html(`🚚 ${info.shipping_method || 'Không xác định'}`);
-        $('#total-amount').text(info.order_total || '0');
-        $('#shipping-fee').text(info.shipping_fee || '0');
-        
-        // Xóa thông tin sau khi hiển thị
-        sessionStorage.removeItem('orderInfo');
-        
-        // Animation hiệu ứng
-        $('.order-info-card').addClass('animate__animated animate__fadeInUp');
-        
-    } else {
-        // Nếu không có thông tin, hiển thị mặc định
-        $('#payment-method').html('❓ Không có thông tin');
-        $('#shipping-method').html('❓ Không có thông tin');
-        $('#total-amount').text('0');
-        $('#shipping-fee').text('0');
-    }
-
+    // Animation hiệu ứng
+    $('.order-info-card').addClass('animate__animated animate__fadeInUp');
+    
     // Thêm animation cho success icon
     setTimeout(function() {
         $('.success-icon').addClass('animate__animated animate__pulse animate__infinite');

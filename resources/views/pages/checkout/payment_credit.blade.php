@@ -44,10 +44,6 @@
                                 <p><strong>Mã đơn hàng:</strong></p>
                                 <p style="color: #007bff; font-weight: bold;">#{{ Session::get('order_info.order_code') }}</p>
                             </div>
-                            <div class="col-md-6">
-                                <p><strong>Thời gian đặt:</strong></p>
-                                <p>{{ date('d/m/Y H:i:s') }}</p>
-                            </div>
                         </div>
 
                         <hr>
@@ -68,9 +64,36 @@
 
                         <div class="row">
                             <div class="col-md-6">
+                                <p><strong>Tạm tính:</strong></p>
+                                <p>{{ number_format(Session::get('order_info.subtotal', 0), 0, ',', '.') }} VNĐ</p>
+                            </div>
+                            <div class="col-md-6">
+                                <p><strong>Phí vận chuyển:</strong></p>
+                                <p>{{ number_format(Session::get('order_info.shipping_fee', 0), 0, ',', '.') }} VNĐ</p>
+                            </div>
+                        </div>
+
+                        @if(Session::get('order_info.discount_amount', 0) > 0)
+                        <div class="row">
+                            <div class="col-md-12">
+                                <p><strong>Giảm giá:</strong></p>
+                                <p style="color: #28a745; font-weight: bold; font-size: 16px;">
+                                    -{{ number_format(Session::get('order_info.discount_amount'), 0, ',', '.') }} VNĐ
+                                </p>
+                                @if(Session::get('order_info.discount_description'))
+                                <p style="font-size: 12px; margin-top: 5px;">
+                                    <strong>Loại ưu đãi đã sử dụng:</strong> {{ Session::get('order_info.discount_description') }}
+                                </p>
+                                @endif
+                            </div>
+                        </div>
+                        @endif
+
+                        <div class="row">
+                            <div class="col-md-6">
                                 <p><strong>Tổng tiền:</strong></p>
-                                <p style="color: #dc3545; font-size: 20px; font-weight: bold;">
-                                    {{ number_format(Session::get('order_info.order_total'), 0, ',', '.') }} VNĐ
+                                <p style="color: #e74c3c; font-size: 20px; font-weight: bold;">
+                                    {{ number_format(Session::get('order_info.order_total', 0), 0, ',', '.') }} VNĐ
                                 </p>
                             </div>
                         </div>
@@ -109,7 +132,7 @@
                         <a href="{{URL::to('/')}}" class="btn btn-primary btn-lg" style="margin: 0 10px;">
                             <i class="fa fa-home"></i> Về trang chủ
                         </a>
-                        <a href="{{URL::to('/shop')}}" class="btn btn-success btn-lg" style="margin: 0 10px;">
+                        <a href="{{URL::to('/trang-chu')}}" class="btn btn-success btn-lg" style="margin: 0 10px;">
                             <i class="fa fa-shopping-bag"></i> Tiếp tục mua sắm
                         </a>
                     </div>

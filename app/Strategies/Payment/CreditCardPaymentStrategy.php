@@ -5,101 +5,94 @@ namespace App\Strategies\Payment;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Session;
-use Illuminate\Support\Facades\Validator;
 
 class CreditCardPaymentStrategy implements IPaymentStrategy
 {
     /**
      * Xử lý thanh toán qua thẻ tín dụng
+     * 
+     * @param array $orderData
+     * @param Request $request
+     * @return array
      */
     public function processPayment(array $orderData, Request $request): array
     {
         try {
-            // Kiểm tra thông tin thẻ cơ bản
-            if (!$request->card_number || !$request->card_holder || !$request->expiry_date || !$request->cvv) {
-                return [
-                    'success' => false,
-                    'message' => 'Vui lòng nhập đầy đủ thông tin thẻ tín dụng'
-                ];
+            // Validate required data with detailed error messages
+            $missingFields = [];
+            if (!isset($orderData['customer_id'])) {
+                $missingFields[] = 'customer_id';
             }
-
-            // Kiểm tra tổng tiền đơn hàng
-            if (!isset($orderData['total'])) {
-                return [
-                    'success' => false,
-                    'message' => 'Không tìm thấy thông tin tổng tiền đơn hàng'
-                ];
+            if (!isset($orderData['shipping_id'])) {
+                $missingFields[] = 'shipping_id';
             }
-
-            // Simulate credit card payment processing
-            sleep(2); // Simulate processing time
-
-            // Kiểm tra thẻ hợp lệ (demo)
-            $card_number = $request->card_number;
-            $last_digit = substr($card_number, -1);
+            if (!isset($orderData['order_total'])) {
+                $missingFields[] = 'order_total';
+            }
             
-            // Demo: Chỉ chấp nhận thẻ có số cuối là số chẵn
-            if ($last_digit % 2 !== 0) {
+            if (!empty($missingFields)) {
                 return [
                     'success' => false,
-                    'message' => 'Thẻ không hợp lệ hoặc không đủ số dư. Vui lòng thử lại với thẻ khác.'
+                    'message' => 'Thiếu thông tin đơn hàng cần thiết: ' . implode(', ', $missingFields)
                 ];
             }
 
-            // Lưu thông tin thanh toán
-            $payment_data = [
+            // Tạo payment record trước
+            $payment_id = DB::table('tbl_payment')->insertGetId([
                 'payment_method' => 'Credit Card',
-                'payment_status' => 'Đã thanh toán',
-                'payment_amount' => $orderData['total'],
-                'payment_details' => json_encode([
-                    'card_last4' => substr($card_number, -4),
-                    'card_holder' => $request->card_holder,
-                    'expiry_date' => $request->expiry_date
-                ]),
+                'payment_status' => 'Chờ thanh toán',
+                'payment_amount' => $orderData['order_total'] ?? 0,
                 'created_at' => now(),
                 'updated_at' => now()
-            ];
+            ]);
 
-            $payment_id = DB::table('tbl_payment')->insertGetId($payment_data);
+            // Tạo đơn hàng trong database với payment_id
+            $order_id = DB::table('tbl_order')->insertGetId([
+                'customer_id' => $orderData['customer_id'] ?? 0,
+                'shipping_id' => $orderData['shipping_id'] ?? null,
+                'payment_id' => $payment_id,
+                'order_total' => $orderData['order_total'] ?? 0,
+                'order_status' => 'Chờ thanh toán',
+                'order_code' => 'ORD' . time() . rand(100, 999),
+                'created_at' => now(),
+                'updated_at' => now()
+            ]);
 
-            // Cập nhật trạng thái đơn hàng
-            if (isset($orderData['order_id'])) {
-                DB::table('tbl_order')
-                    ->where('order_id', $orderData['order_id'])
-                    ->update([
-                        'payment_id' => $payment_id,
-                        'order_status' => 'Đã thanh toán',
+            // Lưu order details
+            $cart = Session::get('cart');
+            if ($cart) {
+                foreach ($cart as $item) {
+                    DB::table('tbl_order_details')->insert([
+                        'order_id' => $order_id,
+                        'product_id' => $item['product_id'] ?? 0,
+                        'product_name' => $item['product_name'] ?? '',
+                        'product_price' => $item['product_price'] ?? 0,
+                        'product_sales_quanlity' => $item['product_qty'] ?? 0,
+                        'created_at' => now(),
                         'updated_at' => now()
                     ]);
+                }
             }
-
-            // Lưu thông tin đơn hàng vào session
-            $order_info = [
-                'order_id' => $orderData['order_id'] ?? null,
-                'order_code' => DB::table('tbl_order')->where('order_id', $orderData['order_id'])->value('order_code'),
-                'order_total' => $orderData['total'],
-                'payment_method' => 'Thanh toán qua thẻ tín dụng',
-                'transaction_id' => 'TXN' . time() . rand(100, 999)
-            ];
-            Session::put('order_info', $order_info);
-
+            
             return [
                 'success' => true,
-                'message' => 'Thanh toán thành công!',
-                'payment_id' => $payment_id,
-                'order_info' => $order_info
+                'message' => 'Đang xử lý thanh toán qua thẻ tín dụng...',
+                'order_id' => $order_id,
+                'redirect_url' => route('payment-credit')
             ];
-
+            
         } catch (\Exception $e) {
             return [
                 'success' => false,
-                'message' => 'Có lỗi xảy ra khi xử lý thanh toán: ' . $e->getMessage()
+                'message' => 'Có lỗi xảy ra khi xử lý thanh toán thẻ tín dụng: ' . $e->getMessage()
             ];
         }
     }
 
     /**
      * Lấy tên phương thức thanh toán
+     * 
+     * @return string
      */
     public function getPaymentMethodName(): string
     {
@@ -108,6 +101,8 @@ class CreditCardPaymentStrategy implements IPaymentStrategy
 
     /**
      * Lấy mã phương thức thanh toán
+     * 
+     * @return int
      */
     public function getPaymentMethodCode(): int
     {
@@ -116,13 +111,14 @@ class CreditCardPaymentStrategy implements IPaymentStrategy
 
     /**
      * Validate dữ liệu thanh toán
+     * 
+     * @param Request $request
+     * @return bool
      */
     public function validatePaymentData(Request $request): bool
     {
-        // Chỉ kiểm tra các trường bắt buộc
-        if (!$request->card_number || !$request->card_holder || !$request->expiry_date || !$request->cvv) {
-            throw new \Exception('Vui lòng nhập đầy đủ thông tin thẻ tín dụng');
-        }
+        // Với Credit Card, không cần validate ở đây
+        // Validation sẽ được thực hiện ở trang riêng
         return true;
     }
 }

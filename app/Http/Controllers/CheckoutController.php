@@ -18,6 +18,7 @@ use App\Rules\Captcha;
 use App\Models\Shipping;
 use App\Models\Order;
 use App\Models\OrderDetail;
+use App\Models\Coupon;
 
 // Import Strategy Pattern classes
 use App\Strategies\Payment\PaymentContext;
@@ -28,6 +29,11 @@ use Illuminate\Support\Facades\Validator;
 use App\Strategies\Shipping\ShippingContext;
 use App\Strategies\Shipping\StandardShippingStrategy;
 use App\Strategies\Shipping\ExpressShippingStrategy;
+
+// Import Discount Strategy Pattern classes
+use App\Strategies\Discount\DiscountContext;
+use App\Strategies\Discount\MembershipDiscountStrategy;
+use App\Strategies\Discount\VolumeDiscountStrategy;
 
 class CheckoutController extends Controller
 {
@@ -209,255 +215,240 @@ class CheckoutController extends Controller
         return Redirect::to('/checkout');
     }
     
-    public function confirmOrder(Request $request) {
+    /**
+     * Xác nhận đặt hàng
+     */
+    public function confirmOrder(Request $request)
+    {
         try {
-            $validator = Validator::make($request->all(), [
+            // Validate input
+            $request->validate([
                 'shipping_name' => 'required|string|max:255',
-                'shipping_email' => 'required|email|max:255',
+                'shipping_email' => 'required|email',
                 'shipping_phone' => 'required|string|max:20',
-                'shipping_address_detail' => 'required|string|max:500',
-                'payment_select' => 'required|integer|in:2,3',
-                'shipping_select' => 'required|integer|in:1,2'
+                'shipping_address' => 'required|string',
+                'payment_select' => 'required|in:2,3',
+                'shipping_select' => 'required|in:1,2'
             ]);
 
-            if ($validator->fails()) {
-                if ($request->ajax()) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'Thông tin không hợp lệ: ' . implode(', ', $validator->errors()->all())
-                    ]);
-                } else {
-                    Session::put('message', 'Thông tin không hợp lệ: ' . implode(', ', $validator->errors()->all()));
-                    return Redirect::to('/payment');
-                }
-            }
-
-            // Kiểm tra giỏ hàng
             $cart = Session::get('cart');
             if (!$cart || empty($cart)) {
-                if ($request->ajax()) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'Giỏ hàng trống!'
-                    ]);
-                } else {
-                    Session::put('message', 'Giỏ hàng trống!');
-                    return Redirect::to('/gio-hang');
-                }
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Giỏ hàng trống'
+                ]);
             }
 
-            // Lưu thông tin shipping
-            $shipping_data = [
+            // Tính tổng đơn hàng
+            $subtotal = 0;
+            foreach($cart as $item) {
+                $subtotal += $item['product_price'] * $item['product_qty'];
+            }
+
+            // Tính phí vận chuyển
+            $shippingFee = $request->input('fee_shipping', 10000);
+            
+            // Tính discount từ strategy pattern (chỉ VIP và Volume)
+            $discountAmount = 0;
+            $selectedDiscountType = $request->input('selected_discount_type');
+            
+            // Debug: Log selected_discount_type từ request
+            // Log::info('=== DEBUG SELECTED DISCOUNT TYPE ===');
+            // Log::info('selected_discount_type from request: ' . ($selectedDiscountType ?? 'null'));
+            // Log::info('=====================================');
+            
+            if ($selectedDiscountType && $selectedDiscountType !== 'none') {
+                $tempOrder = new \stdClass();
+                $tempOrder->total_amount = $subtotal;
+                $tempOrder->user = null;
+                $customerId = Session::get('customer_id');
+                if ($customerId) {
+                    $tempOrder->user = DB::table('tbl_customers')->where('customer_id', $customerId)->first();
+                }
+                $tempOrder->order_details = collect();
+                foreach($cart as $item) {
+                    for ($i = 0; $i < $item['product_qty']; $i++) {
+                        $detail = new \stdClass();
+                        $detail->quantity = 1;
+                        $tempOrder->order_details->push($detail);
+                    }
+                }
+                // Chọn strategy phù hợp
+                $discountContext = new \App\Strategies\Discount\DiscountContext();
+                if ($selectedDiscountType === 'membership') {
+                    $discountContext->setDiscountStrategy(new \App\Strategies\Discount\MembershipDiscountStrategy());
+                } elseif ($selectedDiscountType === 'volume') {
+                    $discountContext->setDiscountStrategy(new \App\Strategies\Discount\VolumeDiscountStrategy());
+                }
+                $discountResult = $discountContext->calculateDiscount($tempOrder);
+                $discountAmount = $discountResult['amount'] ?? 0;
+            }
+            
+            // Tính coupon discount riêng biệt (nếu có)
+            $couponDiscount = 0;
+            if (Session::has('coupon')) {
+                $coupon = Session::get('coupon');
+                foreach($coupon as $key => $val) {
+                    if($val['coupon_condition'] == 1) {
+                        $couponDiscount = ($subtotal * $val['coupon_number']) / 100;
+                    } else {
+                        $couponDiscount = $val['coupon_number'];
+                    }
+                }
+            }
+            
+            // Tổng discount = Strategy discount + Coupon discount
+            $totalDiscount = $discountAmount + $couponDiscount;
+            
+            // Tính tổng cuối
+            $total = $subtotal - $totalDiscount + $shippingFee;
+
+            // Debug: Log các giá trị tính toán
+            // Log::info('=== DEBUG ORDER CALCULATION ===');
+            // Log::info('Subtotal: ' . $subtotal);
+            // Log::info('Strategy Discount: ' . $discountAmount);
+            // Log::info('Coupon Discount: ' . $couponDiscount);
+            // Log::info('Total Discount: ' . $totalDiscount);
+            // Log::info('Shipping Fee: ' . $shippingFee);
+            // Log::info('Final Total: ' . $total);
+            // Log::info('Selected Discount Type: ' . ($selectedDiscountType ?? 'none'));
+            // Log::info('================================');
+
+            // --- XỬ LÝ SHIPPING STRATEGY ---
+            $shippingContext = new \App\Strategies\Shipping\ShippingContext();
+            if ($request->shipping_select == 1) {
+                $shippingContext->setShippingStrategy(new \App\Strategies\Shipping\StandardShippingStrategy());
+            } elseif ($request->shipping_select == 2) {
+                $shippingContext->setShippingStrategy(new \App\Strategies\Shipping\ExpressShippingStrategy());
+            }
+            
+            $orderData = [
+                'customer_id' => Session::get('customer_id') ?? 0,
+                'order_total' => $total,
                 'shipping_name' => $request->shipping_name,
                 'shipping_email' => $request->shipping_email,
                 'shipping_phone' => $request->shipping_phone,
-                'shipping_street' => $request->shipping_address_detail,
-                'shipping_ward' => $request->nameWards ? $this->getWardName($request->nameWards) : '',
-                'shipping_district' => $request->nameProvince ? $this->getDistrictName($request->nameProvince) : '',
-                'shipping_city' => $request->nameCity ? $this->getCityName($request->nameCity) : '',
+                'shipping_address' => $request->shipping_address,
                 'shipping_note' => $request->shipping_note ?? '',
                 'shipping_method' => $request->shipping_select,
-                'created_at' => now(),
-                'updated_at' => now()
+                'nameWards' => $request->nameWards,
+                'nameProvince' => $request->nameProvince,
+                'nameCity' => $request->nameCity
             ];
-            $shipping_id = DB::table('tbl_shipping')->insertGetId($shipping_data);
-            Session::put('shipping_id', $shipping_id);
             
-            // Xử lý vận chuyển theo Strategy Pattern
-            $shipping_method = $request->shipping_select;
-            $shipping_context = new ShippingContext();
+            // Debug: Log session and order data
+            // Log::info('Session customer_id: ' . (Session::get('customer_id') ?? 'null'));
+            // Log::info('Order data before shipping:', $orderData);
             
-            switch($shipping_method) {
-                case 1:
-                    $shipping_strategy = new StandardShippingStrategy();
-                    break;
-                case 2:
-                    $shipping_strategy = new ExpressShippingStrategy();
-                    break;
-                default:
-                    $error_message = 'Phương thức vận chuyển không hợp lệ!';
-                    if ($request->ajax()) {
-                        return response()->json([
-                            'success' => false,
-                            'message' => $error_message
-                        ]);
-                    } else {
-                        Session::put('message', $error_message);
-                        return Redirect::to('/payment');
-                    }
-            }
-
-            $shipping_context->setShippingStrategy($shipping_strategy);
-            
-            // Xử lý thanh toán theo Strategy Pattern
-            $payment_method = $request->payment_select;
-            $payment_method_name = '';
-            $context = new \App\Strategies\Payment\PaymentContext();
-            
-            switch($payment_method) {
-                case 2:
-                    $strategy = new \App\Strategies\Payment\CashOnDeliveryStrategy();
-                    $payment_method_name = 'Thanh toán khi nhận hàng (COD)';
-                    break;
-                case 3:
-                    $strategy = new \App\Strategies\Payment\CreditCardPaymentStrategy();
-                    $payment_method_name = 'Thanh toán qua thẻ tín dụng';
-                    break;
-                default:
-                    $error_message = 'Phương thức thanh toán không hợp lệ!';
-                    if ($request->ajax()) {
-                        return response()->json([
-                            'success' => false,
-                            'message' => $error_message
-                        ]);
-                    } else {
-                        Session::put('message', $error_message);
-                        return Redirect::to('/payment');
-                    }
-            }
-
-            $context->setPaymentStrategy($strategy);
-
-            // Tính toán tổng tiền
-            $total = 0;
-            foreach($cart as $item) {
-                $total += $item['product_price'] * $item['product_qty'];
-            }
-
-            // Áp dụng coupon
-            if(Session::get('coupon')) {
-                foreach(Session::get('coupon') as $coupon) {
-                    if($coupon['coupon_condition'] == 1) {
-                        $total = $total - ($total * $coupon['coupon_number'] / 100);
-                    } else {
-                        $total = $total - $coupon['coupon_number'];
-                    }
-                }
-            }
-
-            // Thêm phí vận chuyển
-            if(Session::get('fee')) {
-                $total += Session::get('fee');
-            }
-            
-            // Dữ liệu đơn hàng
-            $order_data = [
-                'customer_id' => Session::get('customer_id'),
-                'shipping_id' => $shipping_id,
-                'order_total' => $total,
-                'order_status' => 'Đang chờ xử lý',
-                'shipping_method' => $shipping_method,
-                'ward_name' => $shipping_data['shipping_ward'],
-                'district_name' => $shipping_data['shipping_district'],
-                'city_name' => $shipping_data['shipping_city'],
-                'created_at' => now(),
-                'updated_at' => now()
-            ];
-
-            // Thực hiện vận chuyển theo Strategy Pattern
-            $shipping_result = $shipping_context->executeShipping($order_data, $request);
-            if (!$shipping_result['success']) {
-                if ($request->ajax()) {
+            try {
+                $shippingResult = $shippingContext->executeShipping($orderData, $request);
+                if (!$shippingResult['success']) {
                     return response()->json([
                         'success' => false,
-                        'message' => $shipping_result['message']
+                        'message' => $shippingResult['message'] ?? 'Lỗi vận chuyển'
                     ]);
-                } else {
-                    Session::put('message', $shipping_result['message']);
-                    return Redirect::to('/payment');
                 }
-            }
-
-            // Thực hiện thanh toán theo Strategy Pattern
-            $result = $context->executePayment($order_data, $request);
-
-            if($result['success']) {
-                // Tạo thông tin đơn hàng để lưu vào session
-                $order_info = [
-                    'order_code' => 'ORD' . time() . rand(100, 999),
-                    'order_total' => $total,
-                    'shipping_fee' => Session::get('fee') ?? 0,
-                    'payment_method' => $payment_method_name,
-                    'shipping_method' => $shipping_context->getShippingMethodName(),
-                    'shipping_name' => $request->shipping_name,
-                    'shipping_phone' => $request->shipping_phone,
-                    'shipping_address_detail' => $request->shipping_address_detail,
-                    'shipping_email' => $request->shipping_email,
-                    'ward_name' => $shipping_data['shipping_ward'],
-                    'district_name' => $shipping_data['shipping_district'],
-                    'city_name' => $shipping_data['shipping_city']
-                ];
-
-                // Lưu thông tin đơn hàng vào session để các trang thanh toán sử dụng
-                Session::put('order_info', $order_info);
-
-                // Lưu thông tin thanh toán
-                $payment_data = [
-                    'payment_method' => $payment_method_name,
-                    'payment_status' => 'Đang chờ xử lý',
-                    'payment_amount' => $total,
-                    'created_at' => now(),
-                    'updated_at' => now()
-                ];
-                $payment_id = DB::table('tbl_payment')->insertGetId($payment_data);
-
-                // Cập nhật trạng thái đơn hàng
-                if (isset($order_info['order_id'])) {
-                    DB::table('tbl_order')
-                        ->where('order_id', $order_info['order_id'])
-                        ->update([
-                            'payment_id' => $payment_id,
-                            'order_status' => 'Đã thanh toán',
-                            'updated_at' => now()
-                        ]);
-                }
-
-                if ($request->ajax()) {
-                    return response()->json([
-                        'success' => true,
-                        'message' => 'Đặt hàng thành công với phương thức: ' . $payment_method_name,
-                        'order_info' => [
-                            'payment_method' => $payment_method_name,
-                            'shipping_method' => $shipping_context->getShippingMethodName(),
-                            'order_total' => number_format($total, 0, ',', '.'),
-                            'shipping_fee' => number_format(Session::get('fee') ?? 0, 0, ',', '.'),
-                        ],
-                        'redirect_url' => $payment_method == 2 ? route('payment-cod') : route('payment-credit')
-                    ]);
-                } else {
-                    switch($payment_method) {
-                        case 2:
-                            return redirect()->route('payment-cod');
-                        case 3:
-                            return redirect()->route('payment-credit');
-                        default:
-                            Session::put('message', 'Phương thức thanh toán không được hỗ trợ!');
-                            return Redirect::to('/payment');
-                    }
-                }
-            } else {
-                if ($request->ajax()) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => $result['message']
-                    ]);
-                } else {
-                    Session::put('message', $result['message']);
-                    return Redirect::to('/payment');
-                }
-            }
-
-        } catch (\Exception $e) {
-            $error_message = 'Có lỗi xảy ra: ' . $e->getMessage();
-            if ($request->ajax()) {
+                $shipping_id = $shippingResult['shipping_id'] ?? null;
+            } catch (\Exception $e) {
                 return response()->json([
                     'success' => false,
-                    'message' => $error_message
+                    'message' => 'Lỗi xử lý vận chuyển: ' . $e->getMessage()
                 ]);
-            } else {
-                Session::put('message', $error_message);
-                return Redirect::to('/payment');
             }
+
+            // --- XỬ LÝ PAYMENT STRATEGY ---
+            $paymentContext = new \App\Strategies\Payment\PaymentContext();
+            if ($request->payment_select == 2) {
+                $paymentContext->setPaymentStrategy(new \App\Strategies\Payment\CashOnDeliveryStrategy());
+            } elseif ($request->payment_select == 3) {
+                $paymentContext->setPaymentStrategy(new \App\Strategies\Payment\CreditCardPaymentStrategy());
+            }
+            
+            $orderData['shipping_id'] = $shipping_id;
+            
+            // Debug: Log the order data being passed to payment strategy
+            // Log::info('Order data for payment strategy:', $orderData);
+            
+            try {
+                $paymentResult = $paymentContext->executePayment($orderData, $request);
+                if (!$paymentResult['success']) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => $paymentResult['message'] ?? 'Lỗi thanh toán'
+                    ]);
+                }
+            } catch (\Exception $e) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Lỗi xử lý thanh toán: ' . $e->getMessage()
+                ]);
+            }
+
+            // Lưu thông tin đơn hàng vào session để hiển thị trên trang thanh toán thành công
+            $order_info = [
+                'order_id' => $paymentResult['order_id'] ?? null,
+                'order_code' => 'ORD' . time() . rand(100, 999),
+                'shipping_name' => $request->shipping_name,
+                'shipping_phone' => $request->shipping_phone,
+                'shipping_email' => $request->shipping_email,
+                'shipping_address_detail' => $request->shipping_address,
+                'shipping_note' => $request->shipping_note ?? '',
+                'order_total' => $total,
+                'subtotal' => $subtotal,
+                'shipping_fee' => $shippingFee,
+                'discount_amount' => $totalDiscount,
+                'strategy_discount' => $discountAmount,
+                'coupon_discount' => $couponDiscount,
+                'selected_discount_type' => $selectedDiscountType,
+                'discount_description' => $this->getDiscountDescription($selectedDiscountType, $discountAmount, $couponDiscount),
+                'payment_method' => $request->payment_select == 2 ? 'Thanh toán khi nhận hàng (COD)' : 'Thanh toán qua thẻ tín dụng',
+                'shipping_method' => $request->shipping_select == 1 ? 'Giao hàng tiêu chuẩn' : 'Giao hàng nhanh',
+                'ward_name' => $this->getWardName($request->nameWards),
+                'district_name' => $this->getDistrictName($request->nameProvince),
+                'city_name' => $this->getCityName($request->nameCity),
+                'transaction_id' => 'TXN' . time() . rand(100, 999)
+            ];
+
+            Session::put('order_info', $order_info);
+
+            // Debug: Log order_info được lưu vào session
+            // Log::info('=== DEBUG ORDER_INFO SAVED ===');
+            // Log::info('order_total: ' . $order_info['order_total']);
+            // Log::info('subtotal: ' . $order_info['subtotal']);
+            // Log::info('discount_amount: ' . $order_info['discount_amount']);
+            // Log::info('shipping_fee: ' . $order_info['shipping_fee']);
+            // Log::info('discount_description: ' . $order_info['discount_description']);
+            // Log::info('==============================');
+
+            // Xác định redirect URL dựa trên phương thức thanh toán
+            $redirect_url = '';
+            if ($request->payment_select == 2) {
+                // COD - chuyển đến trang payment_cod
+                $redirect_url = route('payment-cod');
+            } elseif ($request->payment_select == 3) {
+                // Credit Card - chuyển đến trang payment_credit
+                $redirect_url = route('payment-credit');
+            } else {
+                // Fallback
+                $redirect_url = url('/order-success');
+            }
+
+            // Xóa giỏ hàng và coupon nếu thành công
+            Session::forget('cart');
+            Session::forget('coupon');
+
+            return response()->json([
+                'success' => true,
+                'message' => $paymentResult['message'] ?? 'Đặt hàng thành công!',
+                'order_id' => $paymentResult['order_id'] ?? null,
+                'redirect_url' => $redirect_url
+            ]);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Lỗi: ' . $e->getMessage()
+            ]);
         }
     }
 
@@ -491,6 +482,15 @@ class CheckoutController extends Controller
             return redirect()->to('/gio-hang');
         }
 
+        // Debug: Log order_info được đọc từ session
+        // Log::info('=== DEBUG SHOW PAYMENT COD ===');
+        // Log::info('order_total: ' . ($order_info['order_total'] ?? 'null'));
+        // Log::info('subtotal: ' . ($order_info['subtotal'] ?? 'null'));
+        // Log::info('discount_amount: ' . ($order_info['discount_amount'] ?? 'null'));
+        // Log::info('shipping_fee: ' . ($order_info['shipping_fee'] ?? 'null'));
+        // Log::info('discount_description: ' . ($order_info['discount_description'] ?? 'null'));
+        // Log::info('==============================');
+
         $meta_title = "Thanh toán khi nhận hàng (COD)";
         $meta_desc = "Hoàn tất đơn hàng với phương thức thanh toán khi nhận hàng";
         $meta_keywords = "thanh toán COD, thanh toán khi nhận hàng, xwatch247";
@@ -517,6 +517,15 @@ class CheckoutController extends Controller
             Session::put('message', 'Vui lòng thực hiện đặt hàng trước khi thanh toán.');
             return redirect()->to('/gio-hang');
         }
+
+        // Debug: Log order_info được đọc từ session
+        // Log::info('=== DEBUG SHOW PAYMENT CREDIT ===');
+        // Log::info('order_total: ' . ($order_info['order_total'] ?? 'null'));
+        // Log::info('subtotal: ' . ($order_info['subtotal'] ?? 'null'));
+        // Log::info('discount_amount: ' . ($order_info['discount_amount'] ?? 'null'));
+        // Log::info('shipping_fee: ' . ($order_info['shipping_fee'] ?? 'null'));
+        // Log::info('discount_description: ' . ($order_info['discount_description'] ?? 'null'));
+        // Log::info('================================');
 
         $meta_title = "Thanh toán qua thẻ tín dụng";
         $meta_desc = "Hoàn tất đơn hàng với phương thức thanh toán qua thẻ tín dụng";
@@ -612,12 +621,25 @@ class CheckoutController extends Controller
             // Lưu thông tin đơn hàng vào session để hiển thị trên trang thành công
             $success_info = [
                 'order_id' => $order_info['order_id'] ?? null,
+                'order_code' => $order_info['order_code'] ?? 'ORD' . time() . rand(100, 999),
                 'shipping_name' => $order_info['shipping_name'] ?? '',
                 'shipping_phone' => $order_info['shipping_phone'] ?? '',
-                'shipping_address' => $order_info['shipping_address'] ?? '',
                 'shipping_email' => $order_info['shipping_email'] ?? '',
+                'shipping_address_detail' => $order_info['shipping_address_detail'] ?? '',
+                'shipping_note' => $order_info['shipping_note'] ?? '',
                 'order_total' => $order_info['order_total'] ?? 0,
+                'subtotal' => $order_info['subtotal'] ?? 0,
+                'shipping_fee' => $order_info['shipping_fee'] ?? 0,
+                'discount_amount' => $order_info['discount_amount'] ?? 0,
+                'strategy_discount' => $order_info['strategy_discount'] ?? 0,
+                'coupon_discount' => $order_info['coupon_discount'] ?? 0,
+                'selected_discount_type' => $order_info['selected_discount_type'] ?? null,
+                'discount_description' => $order_info['discount_description'] ?? '',
                 'payment_method' => 'Thanh toán qua thẻ tín dụng',
+                'shipping_method' => $order_info['shipping_method'] ?? 'Giao hàng tiêu chuẩn',
+                'ward_name' => $order_info['ward_name'] ?? '',
+                'district_name' => $order_info['district_name'] ?? '',
+                'city_name' => $order_info['city_name'] ?? '',
                 'transaction_id' => 'TXN' . time() . rand(100, 999)
             ];
 
@@ -631,7 +653,7 @@ class CheckoutController extends Controller
                 ->with('success', 'Thanh toán thành công! Cảm ơn bạn đã mua hàng.');
             
         } catch (\Exception $e) {
-            Log::error('Credit card payment error: ' . $e->getMessage());
+            // Log::error('Credit card payment error: ' . $e->getMessage());
             return back()->with('error', 'Có lỗi xảy ra khi xử lý thanh toán. Vui lòng thử lại sau.');
         }
     }
@@ -743,5 +765,258 @@ class CheckoutController extends Controller
     private function getWardName($xaid) {
         $ward = \App\Models\Wards::where('xaid', $xaid)->first();
         return $ward ? $ward->name_xaphuong : '';
+    }
+
+    /**
+     * 🎯 Tính toán giảm giá sử dụng Discount Strategy Pattern
+     * @param float $orderAmount Số tiền đơn hàng
+     * @param int $totalQuantity Tổng số lượng sản phẩm
+     * @param int|null $customerId ID khách hàng
+     * @param string|null $selectedDiscountType Loại giảm giá được chọn
+     * @return array Kết quả giảm giá
+     */
+    private function calculateOrderDiscount(float $orderAmount, int $totalQuantity, ?int $customerId, ?string $selectedDiscountType = null): array
+    {
+        // Tạo đối tượng Order giả để test các strategy
+        $tempOrder = new \stdClass();
+        $tempOrder->total_amount = $orderAmount;
+        $tempOrder->user = null;
+        
+        // Lấy thông tin khách hàng nếu có
+        if ($customerId) {
+            $tempOrder->user = DB::table('tbl_customers')->where('customer_id', $customerId)->first();
+        }
+        
+        // 🎯 FAKE MEMBERSHIP LEVEL FOR TESTING
+        // Nếu không có user hoặc user chưa có membership_level, fake dựa trên order amount
+        if (!$tempOrder->user) {
+            $tempOrder->user = new \stdClass();
+            $tempOrder->user->customer_id = 0;
+        }
+        
+        if (!isset($tempOrder->user->membership_level) || !$tempOrder->user->membership_level) {
+            // Fake membership level dựa trên order amount để demo
+            if ($orderAmount >= 3000000) {
+                $tempOrder->user->membership_level = 'gold';    // VIP Gold cho đơn >= 3M
+            } elseif ($orderAmount >= 2000000) {
+                $tempOrder->user->membership_level = 'silver';  // VIP Silver cho đơn >= 2M  
+            } elseif ($orderAmount >= 1000000) {
+                $tempOrder->user->membership_level = 'bronze';  // VIP Bronze cho đơn >= 1M
+            }
+            // Đơn < 1M = guest (không set membership_level)
+        }
+        
+        // Tạo order_details giả để tính số lượng
+        $tempOrder->order_details = collect();
+        for ($i = 0; $i < $totalQuantity; $i++) {
+            $detail = new \stdClass();
+            $detail->quantity = 1;
+            $tempOrder->order_details->push($detail);
+        }
+
+        // Chọn các strategy áp dụng
+        $strategies = $this->selectApplicableStrategies($tempOrder);
+
+        // Kiểm tra có chọn discount type không
+        if (empty($strategies)) {
+            return [
+                'originalAmount' => $orderAmount,
+                'discountAmount' => 0,
+                'finalAmount' => $orderAmount,
+                'description' => 'Không có giảm giá áp dụng'
+            ];
+        }
+
+        // Nếu không chọn discount type, trả về không giảm giá
+        if (!$selectedDiscountType) {
+            return [
+                'originalAmount' => $orderAmount,
+                'discountAmount' => 0,
+                'finalAmount' => $orderAmount,
+                'description' => 'Chưa chọn loại giảm giá'
+            ];
+        }
+
+        // Sử dụng DiscountContext mới
+        $discountContext = new DiscountContext();
+        if ($selectedDiscountType === 'membership') {
+            $discountContext->setDiscountStrategy(new \App\Strategies\Discount\MembershipDiscountStrategy());
+        } elseif ($selectedDiscountType === 'volume') {
+            $discountContext->setDiscountStrategy(new \App\Strategies\Discount\VolumeDiscountStrategy());
+        } else {
+            return [
+                'originalAmount' => $orderAmount,
+                'discountAmount' => 0,
+                'finalAmount' => $orderAmount,
+                'description' => 'Không có giảm giá áp dụng'
+            ];
+        }
+        $result = $discountContext->calculateDiscount($tempOrder);
+
+        return $result['selected'];
+    }
+
+    /**
+     * Chọn các strategy phù hợp dựa trên đơn hàng
+     * Chỉ trả về các strategy tự động: VIP và Volume
+     */
+    private function selectApplicableStrategies($order)
+    {
+        $strategies = [];
+
+        // 1. Membership Discount Strategy (VIP)
+        $membershipStrategy = new MembershipDiscountStrategy();
+        $membershipResult = $membershipStrategy->processDiscount($order);
+        if ($membershipResult['applicable']) {
+                $strategies[] = $membershipStrategy;
+        }
+        
+        // 2. Volume Discount Strategy
+        $volumeStrategy = new VolumeDiscountStrategy();
+        $volumeResult = $volumeStrategy->processDiscount($order);
+        if ($volumeResult['applicable']) {
+                $strategies[] = $volumeStrategy;
+        }
+
+        return $strategies;
+    }
+
+    /**
+     * API để kiểm tra discount có thể áp dụng (cho frontend)
+     * Trả về các strategy tự động: VIP và Volume
+     */
+    public function checkAvailableDiscounts(Request $request)
+    {
+        try {
+            $cart = Session::get('cart');
+            if (!$cart || empty($cart)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Giỏ hàng trống',
+                    'discounts' => []
+                ]);
+            }
+
+            // Tính tổng đơn hàng
+            $subtotal = 0;
+            $totalQuantity = 0;
+            foreach($cart as $item) {
+                $subtotal += $item['product_price'] * $item['product_qty'];
+                $totalQuantity += $item['product_qty'];
+            }
+
+            // Tạo order giả để test
+            $tempOrder = new \stdClass();
+            $tempOrder->total_amount = $subtotal;
+            $tempOrder->user = null;
+            
+            // Lấy thông tin khách hàng nếu có
+            $customerId = Session::get('customer_id');
+            if ($customerId) {
+                $tempOrder->user = DB::table('tbl_customers')->where('customer_id', $customerId)->first();
+            }
+            
+            // Fake membership level for testing
+            if (!$tempOrder->user) {
+                $tempOrder->user = new \stdClass();
+                $tempOrder->user->customer_id = 0;
+            }
+            
+            if (!isset($tempOrder->user->membership_level) || !$tempOrder->user->membership_level) {
+                if ($subtotal >= 3000000) {
+                    $tempOrder->user->membership_level = 'gold';
+                } elseif ($subtotal >= 2000000) {
+                    $tempOrder->user->membership_level = 'silver';
+                } elseif ($subtotal >= 1000000) {
+                    $tempOrder->user->membership_level = 'bronze';
+                }
+            }
+            
+            // Tạo order_details giả
+            $tempOrder->order_details = collect();
+            for ($i = 0; $i < $totalQuantity; $i++) {
+                $detail = new \stdClass();
+                $detail->quantity = 1;
+                $tempOrder->order_details->push($detail);
+            }
+
+            // Lấy các strategy có sẵn (chỉ strategy tự động)
+            $strategies = $this->selectApplicableStrategies($tempOrder);
+            
+            // Lặp qua từng strategy để trả về danh sách các discount khả dụng
+            $availableDiscounts = [];
+            foreach ([
+                new \App\Strategies\Discount\MembershipDiscountStrategy(),
+                new \App\Strategies\Discount\VolumeDiscountStrategy()
+            ] as $discountStrategy) {
+                $discountContext = new \App\Strategies\Discount\DiscountContext();
+                $discountContext->setDiscountStrategy($discountStrategy);
+                $availableDiscounts[] = $discountContext->calculateDiscount($tempOrder);
+            }
+
+            return response()->json([
+                'success' => true,
+                'subtotal' => $subtotal,
+                'discounts' => $availableDiscounts
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Lỗi hệ thống: ' . $e->getMessage(),
+                'discounts' => []
+            ]);
+        }
+    }
+
+    /**
+     * Tạo thông tin shipping
+     */
+    private function createShipping(Request $request)
+    {
+        $shipping = new Shipping();
+        $shipping->shipping_name = $request->shipping_name;
+        $shipping->shipping_email = $request->shipping_email;
+        $shipping->shipping_phone = $request->shipping_phone;
+        $shipping->shipping_address = $request->shipping_address;
+        $shipping->shipping_note = $request->shipping_note ?? '';
+        $shipping->shipping_method = $request->shipping_select;
+        $shipping->save();
+        
+        return $shipping->shipping_id;
+    }
+    
+    /**
+     * Tạo thông tin payment
+     */
+    private function createPayment(Request $request)
+    {
+        $paymentData = [
+            'payment_method' => $request->payment_select == 2 ? 'COD' : 'Credit Card',
+            'payment_status' => 'Pending',
+            'created_at' => now(),
+            'updated_at' => now()
+        ];
+        
+        return DB::table('tbl_payment')->insertGetId($paymentData);
+    }
+
+    /**
+     * Tạo thông tin mô tả discount
+     */
+    private function getDiscountDescription($selectedDiscountType, $discountAmount, $couponDiscount) {
+        $descriptions = [];
+        
+        if ($selectedDiscountType === 'membership' && $discountAmount > 0) {
+            $descriptions[] = 'VIP Discount: -' . number_format($discountAmount, 0, ',', '.') . 'đ';
+        } elseif ($selectedDiscountType === 'volume' && $discountAmount > 0) {
+            $descriptions[] = 'Volume Discount: -' . number_format($discountAmount, 0, ',', '.') . 'đ';
+        }
+        
+        if ($couponDiscount > 0) {
+            $descriptions[] = 'Coupon: -' . number_format($couponDiscount, 0, ',', '.') . 'đ';
+        }
+        
+        return implode(', ', $descriptions);
     }
 }

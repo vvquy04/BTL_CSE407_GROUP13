@@ -100,6 +100,10 @@ Route::get('/all-coupon', [CouponController::class, 'all_coupon']);
 Route::post('/check-coupon', [CartController::class, 'check_coupon']);
 Route::post('/save-coupon', [CouponController::class, 'save_coupon']);
 
+// Apply/Remove coupon from checkout page
+Route::post('/apply-coupon-code', [CartController::class, 'apply_coupon_code']);
+Route::post('/remove-coupon-code', [CartController::class, 'remove_coupon_code']);
+
 // Login Checkout
 Route::get('/delete-fee-home', [CheckoutController::class, 'delete_fee_home']);
 Route::get('/checkout', [CheckoutController::class, 'checkout']);
@@ -112,6 +116,15 @@ Route::post('/calculate-fee', [CheckoutController::class, 'calculate_fee']);
 Route::get('/get-current-fee', [CheckoutController::class, 'getCurrentFee']);
 Route::post('/get-delivery-home', [CheckoutController::class, 'get_delivery_home']);
 Route::post('/confirm-order', [CheckoutController::class, 'confirmOrder']);
+
+// 🎯 Discount Strategy Routes
+Route::post('/check-discounts', [CheckoutController::class, 'checkAvailableDiscounts']);
+Route::post('/api/check-available-discounts', [CheckoutController::class, 'checkAvailableDiscounts']);
+
+// 🎫 Coupon Code Routes
+Route::post('/apply-coupon-code', [CouponController::class, 'applyCouponCode']);
+Route::post('/remove-coupon-code', [CouponController::class, 'removeCouponCode']);
+
 Route::get('/order-success', function() {
     return view('pages.checkout.order_success');
 })->name('order-success');

@@ -20,45 +20,25 @@ class ExpressShippingStrategy implements IShippingStrategy
                 ];
             }
 
-            // Calculate shipping fee
-            $shippingFee = $this->calculateShippingFee($orderData);
-
-            // Calculate estimated delivery date (1 day from now)
-            $estimatedDelivery = now()->addDay();
-
-            // Save shipping information
-            $shipping = new Shipping();
-            $shipping->shipping_name = $request->shipping_name;
-            $shipping->shipping_email = $request->shipping_email;
-            $shipping->shipping_phone = $request->shipping_phone;
-            $shipping->shipping_street = $request->shipping_address_detail;
-            $shipping->shipping_ward = $request->nameWards ? $this->getWardName($request->nameWards) : '';
-            $shipping->shipping_district = $request->nameProvince ? $this->getDistrictName($request->nameProvince) : '';
-            $shipping->shipping_city = $request->nameCity ? $this->getCityName($request->nameCity) : '';
-            $shipping->shipping_note = $request->shipping_note ?? '';
-            $shipping->shipping_method = $this->getShippingMethodCode();
-            $shipping->shipping_fee = $shippingFee;
-            $shipping->estimated_delivery = $estimatedDelivery;
-            $shipping->save();
-
-            // Update order status
-            if (isset($orderData['order_id'])) {
-                DB::table('tbl_order')
-                    ->where('order_id', $orderData['order_id'])
-                    ->update([
-                        'shipping_id' => $shipping->shipping_id,
-                        'shipping_fee' => $shippingFee,
-                        'estimated_delivery' => $estimatedDelivery,
-                        'updated_at' => now()
-                    ]);
-            }
+            // Save shipping information using the correct table structure
+            $shipping_id = DB::table('tbl_shipping')->insertGetId([
+                'shipping_name' => $request->shipping_name,
+                'shipping_email' => $request->shipping_email,
+                'shipping_phone' => $request->shipping_phone,
+                'shipping_street' => $request->shipping_address_detail,
+                'shipping_ward' => $this->getWardName($request->nameWards),
+                'shipping_district' => $this->getDistrictName($request->nameProvince),
+                'shipping_city' => $this->getCityName($request->nameCity),
+                'shipping_note' => $request->shipping_note ?? '',
+                'shipping_method' => $this->getShippingMethodCode(),
+                'created_at' => now(),
+                'updated_at' => now()
+            ]);
 
             return [
                 'success' => true,
                 'message' => 'Xử lý vận chuyển thành công',
-                'shipping_id' => $shipping->shipping_id,
-                'shipping_fee' => $shippingFee,
-                'estimated_delivery' => $estimatedDelivery
+                'shipping_id' => $shipping_id
             ];
 
         } catch (\Exception $e) {

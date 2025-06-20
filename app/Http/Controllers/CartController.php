@@ -185,8 +185,55 @@ class CartController extends Controller
               return redirect()->back()->with('message','Áp dụng mã giảm giá thành công');
             }
             
-        } else {
-            return redirect()->back()->with('message','Mã giảm giá không đúng');
+        } else {            return redirect()->back()->with('message','Mã giảm giá không đúng');
         }
+    }
+    
+    public function apply_coupon_code(Request $request) {
+        $couponCode = $request->input('coupon_code');
+        
+        if (!$couponCode) {
+            return response()->json(['error' => 'Vui lòng nhập mã giảm giá'], 400);
+        }
+        
+        $coupon = Coupon::where('coupon_code', $couponCode)->first();
+        
+        if (!$coupon) {
+            return response()->json(['error' => 'Mã giảm giá không tồn tại'], 400);
+        }
+        
+        // Check if coupon is already applied
+        $couponSession = Session::get('coupon');
+        if ($couponSession) {
+            foreach ($couponSession as $sessionCoupon) {
+                if ($sessionCoupon['coupon_code'] === $couponCode) {
+                    return response()->json(['error' => 'Mã giảm giá đã được áp dụng'], 400);
+                }
+            }
+        }
+        
+        // Apply coupon
+        $coupons = [];
+        if ($couponSession) {
+            $coupons = $couponSession;
+        }
+        
+        $coupons[] = [
+            'coupon_code' => $coupon->coupon_code,
+            'coupon_condition' => $coupon->coupon_condition,
+            'coupon_number' => $coupon->coupon_number,
+        ];
+        
+        Session::put('coupon', $coupons);
+        Session::save();
+        
+        return response()->json(['success' => 'Áp dụng mã giảm giá thành công']);
+    }
+    
+    public function remove_coupon_code(Request $request) {
+        Session::forget('coupon');
+        Session::save();
+        
+        return response()->json(['success' => 'Đã bỏ mã giảm giá']);
     }
 }

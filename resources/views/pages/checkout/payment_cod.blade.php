@@ -49,8 +49,28 @@
                                                 <td>{{ $order_info['shipping_method'] ?? 'Đang cập nhật' }}</td>
                                             </tr>
                                             <tr>
+                                                <td><strong>Tạm tính:</strong></td>
+                                                <td>{{ number_format($order_info['subtotal'] ?? 0, 0, ',', '.') }} VND</td>
+                                            </tr>
+                                            <tr>
+                                                <td><strong>Phí vận chuyển:</strong></td>
+                                                <td>{{ number_format($order_info['shipping_fee'] ?? 0, 0, ',', '.') }} VND</td>
+                                            </tr>
+                                            @if(($order_info['discount_amount'] ?? 0) > 0)
+                                            <tr>
+                                                <td><strong>Giảm giá:</strong></td>
+                                                <td style="color: #28a745;">-{{ number_format($order_info['discount_amount'], 0, ',', '.') }} VND</td>
+                                            </tr>
+                                            @if($order_info['discount_description'] ?? '')
+                                            <tr>
+                                                <td><strong>Loại ưu đãi đã sử dụng:</strong></td>
+                                                <td style="font-size: 12px;">{{ $order_info['discount_description'] }}</td>
+                                            </tr>
+                                            @endif
+                                            @endif
+                                            <tr style="background-color: #f8f9fa; border-top: 2px solid #007bff;">
                                                 <td><strong>Tổng tiền:</strong></td>
-                                                <td><strong style="color: #e74c3c; font-size: 16px;">{{ number_format($order_info['order_total'], 0, ',', '.') }} VND</strong></td>
+                                                <td><strong style="color: #e74c3c; font-size: 18px;">{{ number_format($order_info['order_total'] ?? 0, 0, ',', '.') }} VND</strong></td>
                                             </tr>
                                             <tr>
                                                 <td><strong>Trạng thái:</strong></td>
@@ -143,4 +163,5 @@
     color: #27ae60;
 }
 </style>
+
 @endsection

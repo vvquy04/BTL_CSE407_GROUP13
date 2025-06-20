@@ -42,30 +42,8 @@ class PaymentContext
             ];
         }
 
-        // Tạo payment record
-        $paymentData = [
-            'payment_method' => $this->paymentStrategy->getPaymentMethodCode(),
-            'payment_status' => 'Đang chờ xử lý',
-            'payment_amount' => $orderData['order_total'],
-            'created_at' => now(),
-            'updated_at' => now()
-        ];
-
-        $paymentId = DB::table('tbl_payment')->insertGetId($paymentData);
-
-        // Tạo order
-        $orderData['payment_id'] = $paymentId;
-        $orderId = $this->createOrder($orderData);
-
-        // Tạo order details
-        $this->createOrderDetails($orderId);
-
-        // Xử lý thanh toán theo strategy
-        $paymentResult = $this->paymentStrategy->processPayment([
-            'order_id' => $orderId,
-            'payment_id' => $paymentId,
-            'total' => $orderData['order_total']
-        ], $request);
+        // Xử lý thanh toán theo strategy trước
+        $paymentResult = $this->paymentStrategy->processPayment($orderData, $request);
 
         // Xóa session giỏ hàng sau khi tạo đơn hàng thành công
         if ($paymentResult['success']) {
